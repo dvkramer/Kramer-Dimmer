@@ -7,6 +7,7 @@ import threading
 import pystray
 from PIL import Image, ImageDraw, ImageTk
 import sys
+import os
 import winreg
 import atexit
 import subprocess
@@ -379,6 +380,7 @@ class DimmerApp:
         self.root.configure(bg=self.colors["bg"])
         self.root.overrideredirect(True)
         self.root.attributes('-topmost', True)
+        self.root.withdraw()
 
     def setup_styles(self):
         style = ttk.Style()
