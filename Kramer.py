@@ -425,10 +425,10 @@ class DimmerApp:
         self.create_monitor_list()
         self.create_footer()
         
-        req_height = 350 + (mon_count * 65) + 120
-        if req_height > 900: req_height = 900
+        req_height = 420 + (mon_count * 65) + 120
+        if req_height > 1200: req_height = 1200
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.root.geometry(f"500x{req_height}+{sw-520}+{sh-req_height-60}")
+        self.root.geometry(f"800x{req_height}+{sw-820}+{sh-req_height-60}")
 
     def create_master_control(self, enabled=True):
         frame = ttk.Frame(self.container, style="Win.TFrame")
@@ -524,35 +524,34 @@ class DimmerApp:
                            font=("Montserrat", 9, "bold"))
         self.chk_hyper.pack(side='top', anchor='w', pady=0)
         
-        self.hotkey_var = tk.BooleanVar(value=False)
+        self.hotkey_var = tk.BooleanVar(value=True)
         tk.Checkbutton(frame, text="Enable Hotkeys (R-Shift + [ / ])", variable=self.hotkey_var,
                        bg=self.colors["bg"], fg=self.colors["text"], 
                        selectcolor=self.colors["bg"], activebackground=self.colors["bg"],
                        activeforeground="white", command=self.toggle_hotkeys,
                        font=("Montserrat", 9)).pack(side='top', anchor='w', pady=(2, 5))
+        self.toggle_hotkeys()
 
         row = ttk.Frame(frame, style="Win.TFrame")
         row.pack(fill='x')
 
-        self.autostart_var = tk.BooleanVar(value=self.check_registry())
-        tk.Checkbutton(row, text="Run at Startup", variable=self.autostart_var,
-                       bg=self.colors["bg"], fg=self.colors["text_dim"], 
-                       selectcolor=self.colors["bg"], activebackground=self.colors["bg"],
-                       activeforeground="white", command=self.toggle_autostart,
-                       font=self.font_small, pady=0).pack(side='left', anchor='w')
-        
         link = tk.Label(row, text="Made with <3 - Yashvardhan Gupta", 
                         bg=self.colors["bg"], fg=self.colors["text_dim"],
                         font=self.font_italic, cursor="hand2")
         link.pack(side='right', anchor='e')
         
-        tk.Label(frame, text="Gratefully Stolen and Repackaged by Daniel Vincent Kramer", 
+        user_link = tk.Label(frame, text="Gratefully Stolen and Repackaged by Daniel Vincent Kramer", 
                  bg=self.colors["bg"], fg=self.colors["text_dim"],
-                 font=self.font_italic).pack(side='bottom', anchor='e', pady=(5, 0))
+                 font=self.font_italic, cursor="hand2")
+        user_link.pack(side='bottom', anchor='e', pady=(5, 0))
         
         link.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/YashvardhanG/"))
         link.bind("<Enter>", lambda e: link.config(fg=self.colors["accent"]))
         link.bind("<Leave>", lambda e: link.config(fg=self.colors["text_dim"]))
+
+        user_link.bind("<Button-1>", lambda e: webbrowser.open("https://dvkramer.github.io"))
+        user_link.bind("<Enter>", lambda e: user_link.config(fg=self.colors["accent"]))
+        user_link.bind("<Leave>", lambda e: user_link.config(fg=self.colors["text_dim"]))
 
     def toggle_hyper_mode(self):
         is_hyper = self.hyper_var.get()
