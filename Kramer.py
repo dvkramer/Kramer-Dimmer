@@ -7,7 +7,6 @@ import threading
 import pystray
 from PIL import Image, ImageDraw, ImageTk
 import sys
-import os
 import winreg
 import atexit
 import subprocess
@@ -504,9 +503,9 @@ class DimmerApp:
         if self.hotkey_var.get():
             try:
                 # Right Shift + [ = DECREASE Brightness (-5)
-                keyboard.add_hotkey('right shift+[', lambda: self.change_brightness_safe(-5))
+                keyboard.add_hotkey('right shift+[', lambda: self.change_brightness_safe(-5), suppress=True)
                 # Right Shift + ] = INCREASE Brightness (+5)
-                keyboard.add_hotkey('right shift+]', lambda: self.change_brightness_safe(5))
+                keyboard.add_hotkey('right shift+]', lambda: self.change_brightness_safe(5), suppress=True)
             except Exception as e:
                 print(f"Hotkey Error: {e}")
         else:
