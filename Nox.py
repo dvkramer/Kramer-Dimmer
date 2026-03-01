@@ -7,11 +7,11 @@ import threading
 import pystray
 from PIL import Image, ImageDraw, ImageTk
 import sys
-import os
 import winreg
 import atexit
 import subprocess
 import webbrowser
+import keyboard
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -21,7 +21,6 @@ except Exception:
     except Exception:
         pass
 
-# --- Structures for Ctypes ---
 class RAMP(Structure):
     _fields_ = [("Red", ctypes.c_uint16 * 256),
                 ("Green", ctypes.c_uint16 * 256),
@@ -30,7 +29,6 @@ class RAMP(Structure):
 class RECT(Structure):
     _fields_ = [("left", c_long), ("top", c_long), ("right", c_long), ("bottom", c_long)]
 
-# --- Monitor Name Extraction ---
 def get_real_monitor_names():
     names = []
     try:
@@ -56,7 +54,6 @@ def get_real_monitor_names():
         print(f"Error fetching WMI names: {e}")
     return names
 
-# --- Gamma Controller (Normal Mode) ---
 class GammaController:
     def __init__(self):
         self.monitor_dcs = [] 
@@ -86,12 +83,13 @@ class GammaController:
                         'friendly_name': friendly_name
                     })
 
-    def set_dim_level(self, monitor_index, dim_percent):
-        if dim_percent < 0: dim_percent = 0
-        if dim_percent > 100: dim_percent = 100 
+    # This function sets brightness directly (0=Dark, 100=Bright)
+    def set_brightness(self, monitor_index, brightness_percent):
+        if brightness_percent < 0: brightness_percent = 0
+        if brightness_percent > 100: brightness_percent = 100 
         
-        brightness = 100 - dim_percent
-        multiplier = brightness / 100.0
+        # Gamma calculation (Multiplier 0.0 to 1.0)
+        multiplier = brightness_percent / 100.0
 
         new_ramp = RAMP()
         for i in range(256):
@@ -117,7 +115,6 @@ class GammaController:
             except: pass
         self.monitor_dcs.clear()
 
-# --- Hyper Overlay (Hyper Mode) ---
 class HyperOverlay:
     def __init__(self, root):
         self.root = root
@@ -130,8 +127,12 @@ class HyperOverlay:
         windll.user32.SystemParametersInfoW(48, 0, byref(rect), 0)
         return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
 
-    def update(self, active, dim_percent):
+    def update(self, active, brightness_percent):
         self.active = active
+        # Invert: Lower brightness = Higher Alpha (Darker Overlay)
+        # 100% Bright = 0.0 Alpha
+        # 0% Bright = 0.98 Alpha
+        dim_percent = 100 - brightness_percent
         alpha = (dim_percent / 100.0) * 0.98 
         self.current_alpha = alpha
 
@@ -154,7 +155,6 @@ class HyperOverlay:
             top.title("NoxOverlay")
             top.configure(bg='black')
             top.overrideredirect(True)
-            
             top.update() 
 
             if m.x == 0 and m.y == 0: 
@@ -182,18 +182,18 @@ class HyperOverlay:
             except: pass
         self.windows.clear()
 
-# --- Custom Slider Widget ---
 class ModernSlider(tk.Canvas):
     def __init__(self, master, from_=0, to=100, command=None, 
-                 track_active_col="#000000", track_rem_col="#60cdff", 
+                 track_active_col="#60cdff", track_rem_col="#000000", 
                  thumb_fill_col="#2d2d2d", thumb_border_col="#60cdff", 
                  **kwargs):
         super().__init__(master, height=35, highlightthickness=0, **kwargs)
         self.from_ = from_
         self.to = to
         self.command = command
-        self.value = from_
+        self.value = to # Default to max (100% Brightness)
         
+        # Logic inverted visually: "Active" color should be on the left (0 to Value)
         self.col_track_active = track_active_col  
         self.col_track_rem = track_rem_col     
         self.col_thumb_fill = thumb_fill_col
@@ -220,7 +220,7 @@ class ModernSlider(tk.Canvas):
         return ImageTk.PhotoImage(img)
     
     def set_accent_color(self, color):
-        self.col_track_rem = color
+        self.col_track_active = color # Brightness bar is the colored part
         self.col_thumb_border = color
         self.thumb_img = self._create_smooth_thumb()
         self.draw()
@@ -252,11 +252,16 @@ class ModernSlider(tk.Canvas):
         h = self.winfo_height()
         cy = h / 2
         x_val = self.val_to_x(self.value)
+        
+        # Track Background (The "Empty" part on the right)
         self.create_line(self.padding, cy, w - self.padding, cy, 
                          fill=self.col_track_rem, width=self.track_height, capstyle=tk.ROUND)
+        
+        # Active Track (The "Bright" part on the left)
         if x_val > self.padding:
             self.create_line(self.padding, cy, x_val, cy, 
                              fill=self.col_track_active, width=self.track_height, capstyle=tk.ROUND)
+                             
         self.create_image(x_val, cy, image=self.thumb_img, anchor='center')
 
     def on_click(self, event):
@@ -269,15 +274,74 @@ class ModernSlider(tk.Canvas):
         self.set(val)
         if self.command: self.command(val)
 
-# --- UI Application ---
+class BrightnessOSD:
+    def __init__(self, master):
+        self.master = master
+        self.window = None
+        self.hide_job = None
+        self.bar_width = 300
+        self.bar_height = 15
+
+    def show(self, level):
+        if self.window is None or not self.window.winfo_exists():
+            self.create_window()
+        
+        self.window.deiconify()
+        self.draw_bar(level)
+        self.window.lift()
+
+        if self.hide_job:
+            self.master.after_cancel(self.hide_job)
+        self.hide_job = self.master.after(3000, self.hide)
+
+    def create_window(self):
+        self.window = tk.Toplevel(self.master)
+        self.window.overrideredirect(True)
+        self.window.attributes('-topmost', True)
+        self.window.attributes('-alpha', 0.9)
+        self.window.config(bg="#202020")
+        
+        sw = self.master.winfo_screenwidth()
+        sh = self.master.winfo_screenheight()
+        w, h = 320, 50
+        x = (sw - w) // 2
+        y = sh - 150
+        self.window.geometry(f"{w}x{h}+{x}+{y}")
+
+        self.canvas = tk.Canvas(self.window, width=w, height=h, bg="#202020", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+
+    def draw_bar(self, level):
+        self.canvas.delete("all")
+        cx = 160 
+        cy = 25  
+        
+        self.canvas.create_text(cx, cy - 15, text=f"Brightness: {int(level)}%", 
+                                fill="white", font=("Montserrat", 10, "bold"))
+        
+        bg_x1 = cx - (self.bar_width // 2)
+        bg_y1 = cy + 5
+        bg_x2 = bg_x1 + self.bar_width
+        bg_y2 = bg_y1 + self.bar_height
+        self.canvas.create_rectangle(bg_x1, bg_y1, bg_x2, bg_y2, fill="#404040", outline="")
+
+        fill_width = (level / 100) * self.bar_width
+        if fill_width > 0:
+            self.canvas.create_rectangle(bg_x1, bg_y1, bg_x1 + fill_width, bg_y2, 
+                                         fill="#60cdff", outline="")
+
+    def hide(self):
+        if self.window:
+            self.window.withdraw()
+
 class DimmerApp:
     def __init__(self, root):
         self.root = root
         self.gamma = GammaController()
         self.overlay = HyperOverlay(root)
         
-        self.MAX_DIM = 100
-        self.DEFAULT_DIM = 30 
+        self.MAX_BRIGHT = 100
+        self.DEFAULT_BRIGHT = 100 # Default to Full Brightness 
         self.is_updating = False
         
         self.colors = {
@@ -296,7 +360,9 @@ class DimmerApp:
         self.setup_tray()
         self.setup_ui()
         
-        self.root.after(100, self.apply_default_dimming)
+        self.osd = BrightnessOSD(root)
+
+        self.root.after(100, self.apply_default_brightness)
         
         self.root.bind("<FocusOut>", self.on_focus_out)
         self.root.bind('<Control-q>', lambda e: self.quit_app())
@@ -330,19 +396,16 @@ class DimmerApp:
                  font=self.font_title)
         self.title_lbl.pack(side='left', padx=15)
         
-        # --- CLOSE BUTTON (Quits) ---
         close_btn = tk.Button(title_bar, text="✕", bg=self.colors["bg"], fg=self.colors["text"], 
                               bd=0, activebackground="#c42b1c", activeforeground="white", 
                               command=self.quit_app, font=("Arial", 11)) 
         close_btn.pack(side='right', padx=(5, 10))
         
-        # --- MINIMIZE BUTTON (Tray) ---
         min_btn = tk.Button(title_bar, text="—", bg=self.colors["bg"], fg=self.colors["text"], 
                               bd=0, activebackground=self.colors["surface"], activeforeground="white", 
                               command=self.hide_to_tray, font=("Arial", 11, "bold")) 
         min_btn.pack(side='right', padx=0)
 
-        # Hover Effects
         min_btn.bind("<Enter>", lambda e: min_btn.config(bg=self.colors["surface"]))
         min_btn.bind("<Leave>", lambda e: min_btn.config(bg=self.colors["bg"]))
         close_btn.bind("<Enter>", lambda e: close_btn.config(bg="#c42b1c", fg="white"))
@@ -362,10 +425,10 @@ class DimmerApp:
         self.create_monitor_list()
         self.create_footer()
         
-        req_height = 170 + (mon_count * 65) + 120
-        if req_height > 600: req_height = 600
+        req_height = 350 + (mon_count * 65) + 120
+        if req_height > 900: req_height = 900
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.root.geometry(f"360x{req_height}+{sw-380}+{sh-req_height-60}")
+        self.root.geometry(f"500x{req_height}+{sw-520}+{sh-req_height-60}")
 
     def create_master_control(self, enabled=True):
         frame = ttk.Frame(self.container, style="Win.TFrame")
@@ -374,16 +437,16 @@ class DimmerApp:
         header.pack(fill='x', pady=(0, 5))
         
         lbl_style = "Sub.TLabel" if enabled else "Disabled.TLabel"
-        ttk.Label(header, text="Master Dim Level", style=lbl_style).pack(side='left')
+        ttk.Label(header, text="Master Brightness", style=lbl_style).pack(side='left')
         
-        self.lbl_master_val = ttk.Label(header, text="0%", style="Dim.TLabel", cursor="xterm")
+        self.lbl_master_val = ttk.Label(header, text="100%", style="Dim.TLabel", cursor="xterm")
         self.lbl_master_val.pack(side='right')
         
         if enabled:
             self.lbl_master_val.bind("<Double-Button-1>", lambda e: self.start_edit(e, -1, self.lbl_master_val))
 
         if enabled:
-            self.master_slider = ModernSlider(frame, from_=0, to=self.MAX_DIM, 
+            self.master_slider = ModernSlider(frame, from_=0, to=self.MAX_BRIGHT, 
                                               bg=self.colors["bg"], command=self.on_master_slide)
             self.master_slider.pack(fill='x')
         else:
@@ -392,7 +455,7 @@ class DimmerApp:
                                  track_rem_col=self.colors["disabled"],
                                  thumb_fill_col=self.colors["bg"],
                                  thumb_border_col=self.colors["disabled"])
-            dummy.set(0)
+            dummy.set(100)
             dummy.unbind("<Button-1>")
             dummy.unbind("<B1-Motion>")
             dummy.pack(fill='x')
@@ -409,17 +472,45 @@ class DimmerApp:
             full_name = f"Display {i+1} • {mon['friendly_name']}"
             ttk.Label(header, text=full_name, style="Sub.TLabel").pack(side='left')
             
-            lbl_val = ttk.Label(header, text="0%", style="Dim.TLabel", cursor="xterm")
+            lbl_val = ttk.Label(header, text="100%", style="Dim.TLabel", cursor="xterm")
             lbl_val.pack(side='right')
             
             lbl_val.bind("<Double-Button-1>", lambda e, idx=i, lbl=lbl_val: self.start_edit(e, idx, lbl))
             
-            slider = ModernSlider(frame, from_=0, to=self.MAX_DIM, 
+            slider = ModernSlider(frame, from_=0, to=self.MAX_BRIGHT, 
                                   bg=self.colors["bg"], 
                                   command=lambda v, idx=i, l=lbl_val: self.on_indiv_slide(v, idx, l))
             slider.pack(fill='x')
             
             self.monitor_controls.append({'slider': slider, 'label': lbl_val, 'index': i})
+
+    def change_brightness_safe(self, amount):
+        self.root.after(0, lambda: self._apply_brightness_change(amount))
+
+    def _apply_brightness_change(self, amount):
+        current = self.master_slider.value
+        new_val = current + amount
+        
+        if new_val < 0: new_val = 0
+        if new_val > 100: new_val = 100
+        
+        self.master_slider.set(new_val)
+        self.on_master_slide(new_val)
+        self.osd.show(new_val)
+
+    def toggle_hotkeys(self):
+        if self.hotkey_var.get():
+            try:
+                # Right Shift + [ = DECREASE Brightness (-5)
+                keyboard.add_hotkey('right shift+[', lambda: self.change_brightness_safe(-5))
+                # Right Shift + ] = INCREASE Brightness (+5)
+                keyboard.add_hotkey('right shift+]', lambda: self.change_brightness_safe(5))
+            except Exception as e:
+                print(f"Hotkey Error: {e}")
+        else:
+            try:
+                keyboard.unhook_all()
+            except: pass
 
     def create_footer(self):
         frame = ttk.Frame(self.root, style="Win.TFrame")
@@ -431,9 +522,15 @@ class DimmerApp:
                            selectcolor=self.colors["bg"], activebackground=self.colors["bg"],
                            activeforeground=self.colors["hyper"], command=self.toggle_hyper_mode,
                            font=("Montserrat", 9, "bold"))
-        
         self.chk_hyper.pack(side='top', anchor='w', pady=0)
         
+        self.hotkey_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(frame, text="Enable Hotkeys (R-Shift + [ / ])", variable=self.hotkey_var,
+                       bg=self.colors["bg"], fg=self.colors["text"], 
+                       selectcolor=self.colors["bg"], activebackground=self.colors["bg"],
+                       activeforeground="white", command=self.toggle_hotkeys,
+                       font=("Montserrat", 9)).pack(side='top', anchor='w', pady=(2, 5))
+
         row = ttk.Frame(frame, style="Win.TFrame")
         row.pack(fill='x')
 
@@ -469,10 +566,10 @@ class DimmerApp:
             self.overlay.update(True, current_val)
             self.title_lbl.config(fg=self.colors["hyper"])
         else:
-            self.overlay.update(False, 0)
+            self.overlay.update(False, 100) # Reset overlay to clean
             self.title_lbl.config(fg=self.colors["text"])
         
-        self.gamma.set_dim_level(-1, int(current_val))
+        self.gamma.set_brightness(-1, int(current_val))
         self.root.lift()
 
     def start_edit(self, event, idx, label_widget):
@@ -495,7 +592,7 @@ class DimmerApp:
         try:
             val = int(val_str)
             if val < 0: val = 0
-            if val > self.MAX_DIM: val = self.MAX_DIM
+            if val > self.MAX_BRIGHT: val = self.MAX_BRIGHT
         except ValueError:
             val = None 
             
@@ -513,9 +610,9 @@ class DimmerApp:
                         self.on_indiv_slide(val, idx, label_widget)
                         break
 
-    def apply_default_dimming(self):
-        self.master_slider.set(self.DEFAULT_DIM)
-        self.on_master_slide(self.DEFAULT_DIM)
+    def apply_default_brightness(self):
+        self.master_slider.set(self.DEFAULT_BRIGHT)
+        self.on_master_slide(self.DEFAULT_BRIGHT)
 
     def on_master_slide(self, val):
         if self.is_updating: return
@@ -523,16 +620,16 @@ class DimmerApp:
         
         try:
             value = float(val)
-            if value > self.MAX_DIM: value = self.MAX_DIM
+            if value > self.MAX_BRIGHT: value = self.MAX_BRIGHT
             
             self.lbl_master_val.config(text=f"{int(value)}%", foreground=self.colors["text_dim"])
 
-            self.gamma.set_dim_level(-1, int(value))
+            self.gamma.set_brightness(-1, int(value))
 
             if self.hyper_var.get():
                 self.overlay.update(True, value)
             else:
-                self.overlay.update(False, 0)
+                self.overlay.update(False, 100)
 
             for ctrl in self.monitor_controls:
                 ctrl['slider'].set(value)
@@ -547,11 +644,11 @@ class DimmerApp:
         
         try:
             value = float(val)
-            if value > self.MAX_DIM: value = self.MAX_DIM
+            if value > self.MAX_BRIGHT: value = self.MAX_BRIGHT
             
             lbl_widget.config(text=f"{int(value)}%", foreground=self.colors["text_dim"])
             
-            self.gamma.set_dim_level(idx, int(value))
+            self.gamma.set_brightness(idx, int(value))
 
             if self.hyper_var.get():
                  self.overlay.update(True, value)
