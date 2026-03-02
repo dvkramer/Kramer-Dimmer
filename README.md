@@ -8,3 +8,6 @@ Changes that I have made:
 - Made the window waaaay bigger
 - Plastered my name all over it
 
+# Sad update
+
+After using this for a full day, I can see that the hotkeys frequently stop working. I have no idea why. Gemini and I are making a replacement for this software using autohotkey instead of python. Apparently AHK can also change gamma.
